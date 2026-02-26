@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(.venv/bin/python:*)",
+      "Bash(.venv/bin/pip install:*)",
+      "Bash(head:*)",
+      "Bash(psql postgres:*)",
+      "Bash(createdb trail_social:*)",
+      "Bash(.venv/bin/alembic revision:*)",
+      "Bash(.venv/bin/alembic upgrade:*)",
+      "Bash(curl:*)",
+      "Bash(psql trail_social:*)",
+      "Bash(.venv/bin/pip show:*)",
+      "Bash(.venv/bin/pip uninstall:*)",
+      "Bash(cat:*)",
+      "Bash(createdb trail_social_test:*)",
+      "Bash(.venv/bin/pytest:*)",
+      "Bash(docker build:*)"
+    ]
+  }
+}
