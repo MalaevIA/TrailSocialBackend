@@ -145,6 +145,11 @@ async def test_route(db, test_user) -> TrailRoute:
         difficulty="moderate",
         status=RouteStatus.published,
         tags=["hiking", "nature"],
+        start_lat=55.75,
+        start_lng=37.62,
+        end_lat=55.76,
+        end_lng=37.63,
+        geometry={"type": "LineString", "coordinates": [[37.62, 55.75], [37.63, 55.76]]},
     )
     db.add(route)
     await db.flush()

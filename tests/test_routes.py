@@ -12,6 +12,14 @@ async def test_create_route(client, auth_headers):
         "distance_km": 15.0,
         "difficulty": "moderate",
         "tags": ["alpine", "views"],
+        "start_lat": 46.5,
+        "start_lng": 7.5,
+        "end_lat": 46.6,
+        "end_lng": 7.6,
+        "geometry": {
+            "type": "LineString",
+            "coordinates": [[7.5, 46.5], [7.6, 46.6]],
+        },
     })
     assert resp.status_code == 201
     data = resp.json()
@@ -111,6 +119,14 @@ async def test_draft_route_not_visible(client, test_user, auth_headers, second_a
     resp = await client.post(API, headers=auth_headers, json={
         "title": "Draft Route",
         "status": "draft",
+        "start_lat": 55.75,
+        "start_lng": 37.62,
+        "end_lat": 55.76,
+        "end_lng": 37.63,
+        "geometry": {
+            "type": "LineString",
+            "coordinates": [[37.62, 55.75], [37.63, 55.76]],
+        },
     })
     assert resp.status_code == 201
     route_id = resp.json()["id"]

@@ -17,6 +17,14 @@ async def test_feed_with_followed_user(client, test_user, second_user, auth_head
     await client.post(f"{API}/routes", headers=second_auth_headers, json={
         "title": "Feed Route",
         "region": "FeedRegion",
+        "start_lat": 55.75,
+        "start_lng": 37.62,
+        "end_lat": 55.76,
+        "end_lng": 37.63,
+        "geometry": {
+            "type": "LineString",
+            "coordinates": [[37.62, 55.75], [37.63, 55.76]],
+        },
     })
 
     # test_user's feed should show the route

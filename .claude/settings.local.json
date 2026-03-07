@@ -15,7 +15,9 @@
       "Bash(cat:*)",
       "Bash(createdb trail_social_test:*)",
       "Bash(.venv/bin/pytest:*)",
-      "Bash(docker build:*)"
+      "Bash(docker build:*)",
+      "Bash(find app:*)",
+      "Bash(find:*)"
     ]
   }
 }

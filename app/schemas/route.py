@@ -60,11 +60,11 @@ class RouteCreate(BaseModel):
     difficulty: Optional[Difficulty] = None
     photos: Optional[List[str]] = None
     tags: Optional[List[str]] = None
-    start_lat: Optional[float] = None
-    start_lng: Optional[float] = None
-    end_lat: Optional[float] = None
-    end_lng: Optional[float] = None
-    geometry: Optional[GeoJSONLineString] = None
+    start_lat: float
+    start_lng: float
+    end_lat: float
+    end_lng: float
+    geometry: GeoJSONLineString
     waypoints: Optional[List[Waypoint]] = None
 
 
