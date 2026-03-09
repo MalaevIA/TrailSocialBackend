@@ -1,4 +1,4 @@
-from typing import Optional, List
+from typing import Optional, List, Literal
 
 from pydantic import BaseModel
 
@@ -28,3 +28,14 @@ class GeneratedRoute(BaseModel):
     tips: List[str]
     geometry: Optional[GeoJSONLineString] = None
     waypoints: Optional[List[Waypoint]] = None
+
+
+class TaskCreated(BaseModel):
+    task_id: str
+
+
+class TaskStatus(BaseModel):
+    task_id: str
+    status: Literal["pending", "completed", "failed"]
+    result: Optional[GeneratedRoute] = None
+    error: Optional[str] = None

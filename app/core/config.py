@@ -13,6 +13,10 @@ class Settings(BaseSettings):
     BACKEND_CORS_ORIGINS: List[str] = ["http://localhost:3000", "http://localhost:8080"]
     UPLOAD_DIR: str = "uploads"
     MAX_UPLOAD_SIZE_MB: int = 10
+    YANDEX_GPT_API_KEY: str = ""
+    YANDEX_GPT_FOLDER_ID: str = ""
+    YANDEX_GPT_MODEL: str = "qwen3-235b-a22b-fp8/latest"
+    YANDEX_GEOCODER_API_KEY: str = ""
 
 
 settings = Settings()
