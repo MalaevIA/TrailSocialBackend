@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.comment import Comment
 from app.models.notification import Notification, NotificationType
 from app.models.route import TrailRoute
-from app.models.user import User
+from app.models.user import User, Follow
 from app.schemas.common import PaginatedResponse
 from app.schemas.notification import NotificationResponse, UnreadCountResponse
 
@@ -91,6 +91,45 @@ async def create_notification(
         if enriched:
             await ws_manager.send_to_user(
                 recipient_id, enriched[0].model_dump(mode="json")
+            )
+
+
+async def notify_followers_new_route(
+    db: AsyncSession,
+    author_id: uuid.UUID,
+    route_id: uuid.UUID,
+) -> None:
+    """Notify all followers of the author about a new published route."""
+    result = await db.execute(
+        select(Follow.follower_id).where(Follow.following_id == author_id)
+    )
+    follower_ids = result.scalars().all()
+
+    if not follower_ids:
+        return
+
+    from app.core.ws_manager import ws_manager
+
+    notifications = []
+    for fid in follower_ids:
+        n = Notification(
+            recipient_id=fid,
+            actor_id=author_id,
+            type=NotificationType.new_route,
+            route_id=route_id,
+        )
+        db.add(n)
+        notifications.append(n)
+
+    await db.flush()
+
+    # Real-time push to online followers
+    online = [n for n in notifications if ws_manager.is_online(n.recipient_id)]
+    if online:
+        enriched = await _enrich_notifications(db, online)
+        for notif, enriched_notif in zip(online, enriched):
+            await ws_manager.send_to_user(
+                notif.recipient_id, enriched_notif.model_dump(mode="json")
             )
 
 

@@ -154,6 +154,11 @@ async def create_route(
     )
     await db.flush()
 
+    # Notify followers if published
+    if route.status == RouteStatus.published:
+        from app.services.notification_service import notify_followers_new_route
+        await notify_followers_new_route(db, user_id, route.id)
+
     # Reload with author
     result = await db.execute(select(TrailRoute).where(TrailRoute.id == route.id))
     route = result.scalar_one()
@@ -191,10 +196,17 @@ async def update_route(
     if route.author_id != user_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not the author")
 
+    old_status = route.status
     update_data = data.model_dump(exclude_none=True)
     update_data["updated_at"] = datetime.now(timezone.utc)
     await db.execute(update(TrailRoute).where(TrailRoute.id == route_id).values(**update_data))
     await db.flush()
+
+    # Notify followers when status changes to published
+    new_status = data.status
+    if new_status == RouteStatus.published and old_status != RouteStatus.published:
+        from app.services.notification_service import notify_followers_new_route
+        await notify_followers_new_route(db, user_id, route_id)
 
     result = await db.execute(select(TrailRoute).where(TrailRoute.id == route_id))
     route = result.scalar_one()

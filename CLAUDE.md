@@ -39,6 +39,8 @@ docker compose down
 
 ## Architecture
 
+All endpoints are mounted under `/api/v1/` prefix.
+
 ### Request flow
 ```
 Router → Service → SQLAlchemy async query → DB
@@ -79,6 +81,19 @@ Routers handle HTTP, services contain all business logic. No logic in routers be
 ### Route ordering gotcha
 In `app/routers/users.py`, all `/me/...` endpoints must appear before `/{user_id}` even though `/{user_id}` is typed as `uuid.UUID` (FastAPI still evaluates routes top-to-bottom).
 
+### Route visibility
+Routes have a `status` field (`draft`/`private`/`published`). Published routes are visible to all; non-published only to the author. Services enforce this check.
+
+### AI route generation pipeline
+`app/services/ai_service.py` implements a three-step async pipeline:
+1. **YandexGPT** — generates route text + waypoint place names (no coordinates)
+2. **Yandex Geocoder** — translates place names → lat/lng (parallel requests)
+3. **OSRM** — builds walking route geometry between geocoded waypoints
+
+Generation runs as a background task. The client POSTs to `/ai/generate-route` → gets `task_id`, then polls `GET /ai/tasks/{task_id}` until status is `completed` or `failed`. Tasks are stored in-memory (not persisted).
+
+Supports both native YandexGPT API and OpenAI-compatible models (Qwen, DeepSeek, etc.) via `YANDEX_GPT_MODEL` setting.
+
 ### Alembic migration gotcha
 When adding a new PostgreSQL enum column, you must explicitly create the enum type first in the migration (`sa.Enum(...).create(op.get_bind(), checkfirst=True)`) and add `server_default` for existing rows.
 
@@ -95,6 +110,8 @@ When adding a new PostgreSQL enum column, you must explicitly create the enum ty
 Copy `.env.example` → `.env`. Required vars:
 - `DATABASE_URL` — asyncpg URL, e.g. `postgresql+asyncpg://username@localhost:5432/trail_social`
 - `JWT_SECRET_KEY` — any random string ≥ 32 chars
+- `YANDEX_GPT_API_KEY`, `YANDEX_GPT_FOLDER_ID` — for AI route generation
+- `YANDEX_GEOCODER_API_KEY` — for geocoding waypoint names to coordinates
 
 macOS Homebrew PostgreSQL uses the system username as superuser (not `postgres`).
 

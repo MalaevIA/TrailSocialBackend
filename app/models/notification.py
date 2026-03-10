@@ -13,6 +13,7 @@ class NotificationType(str, enum.Enum):
     new_follower = "new_follower"   # кто-то подписался на меня
     route_like = "route_like"       # лайкнули мой маршрут
     new_comment = "new_comment"     # прокомментировали мой маршрут
+    new_route = "new_route"         # подписка опубликовала маршрут
 
 
 class Notification(Base):
