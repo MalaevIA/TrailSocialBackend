@@ -17,6 +17,8 @@ class UserPublic(BaseModel):
     following_count: int
     routes_count: int
     created_at: datetime
+    is_admin: bool = False
+    is_active: bool = True
 
 
 class UserProfile(UserPublic):
