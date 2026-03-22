@@ -17,7 +17,7 @@ async def generate_route(request: Request, form: RouteBuilderForm, current_user:
 
 @router.get("/tasks/{task_id}", response_model=TaskStatus)
 async def get_task_status(task_id: str):
-    task = ai_service.get_task(task_id)
+    task = await ai_service.get_task(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
     return TaskStatus(

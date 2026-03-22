@@ -27,6 +27,10 @@ class Settings(BaseSettings):
     UPLOAD_DIR: str = "uploads"
     MAX_UPLOAD_SIZE_MB: int = 10
 
+    # Redis (оставить пустым чтобы отключить кэш)
+    REDIS_URL: str = ""
+    CACHE_TTL_SECONDS: int = 300  # 5 минут
+
     # WebSocket
     WS_AUTH_TIMEOUT_SECONDS: int = 10
 

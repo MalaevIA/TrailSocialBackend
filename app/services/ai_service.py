@@ -431,8 +431,12 @@ async def _fetch_photos_for_waypoints(
 
 
 # ---------------------------------------------------------------------------
-# Task management (in-memory)
+# Task management (Redis)
 # ---------------------------------------------------------------------------
+
+_TASK_TTL = 3600  # задачи живут 1 час
+_TASK_PREFIX = "ai_task:"
+
 
 @dataclass
 class _Task:
@@ -440,32 +444,41 @@ class _Task:
     result: Optional[GeneratedRoute] = None
     error: Optional[str] = None
 
-_tasks: dict[str, _Task] = {}
 
-MAX_TASKS = 1000
+async def _save_task(task_id: str, task: _Task) -> None:
+    from app.core.redis import cache_set
+    data = {
+        "status": task.status,
+        "result": task.result.model_dump() if task.result else None,
+        "error": task.error,
+    }
+    await cache_set(f"{_TASK_PREFIX}{task_id}", data, ttl=_TASK_TTL)
 
 
-def _cleanup_tasks():
-    if len(_tasks) > MAX_TASKS:
-        to_remove = list(_tasks.keys())[:len(_tasks) - MAX_TASKS]
-        for k in to_remove:
-            del _tasks[k]
+async def _load_task(task_id: str) -> Optional[_Task]:
+    from app.core.redis import cache_get
+    data = await cache_get(f"{_TASK_PREFIX}{task_id}")
+    if data is None:
+        return None
+    task = _Task(status=data["status"], error=data.get("error"))
+    if data.get("result"):
+        task.result = GeneratedRoute(**data["result"])
+    return task
 
 
 def create_task(form: RouteBuilderForm) -> str:
-    _cleanup_tasks()
     task_id = uuid.uuid4().hex
-    _tasks[task_id] = _Task()
     asyncio.get_event_loop().create_task(_run_generation(task_id, form))
     return task_id
 
 
-def get_task(task_id: str) -> Optional[_Task]:
-    return _tasks.get(task_id)
+async def get_task(task_id: str) -> Optional[_Task]:
+    return await _load_task(task_id)
 
 
 async def _run_generation(task_id: str, form: RouteBuilderForm):
-    task = _tasks[task_id]
+    task = _Task()
+    await _save_task(task_id, task)
     try:
         result = await _generate_route(form)
         task.status = "completed"
@@ -477,6 +490,7 @@ async def _run_generation(task_id: str, form: RouteBuilderForm):
         logger.error("Task %s failed: %s", task_id, e)
         task.status = "failed"
         task.error = "Internal error"
+    await _save_task(task_id, task)
 
 
 # ---------------------------------------------------------------------------

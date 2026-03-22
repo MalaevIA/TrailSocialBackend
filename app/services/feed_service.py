@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Optional
 
 import httpx
-from sqlalchemy import select, func, and_, update, literal
+from sqlalchemy import select, func, and_, update, literal, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -28,6 +28,13 @@ async def get_recommended(
     page_size: int,
     user_id: Optional[uuid.UUID] = None,
 ) -> PaginatedResponse[RouteResponse]:
+    from app.core.redis import cache_get, cache_set
+    # Кэш только для анонимных запросов — у авторизованных is_liked/is_saved уникальны
+    cache_key = f"recommended:{page}:{page_size}" if not user_id else None
+    if cache_key:
+        cached = await cache_get(cache_key)
+        if cached:
+            return PaginatedResponse(**cached)
     """Общие рекомендации (одинаковые для всех) по формуле Hacker News:
        score = engagement / (возраст_в_часах + 2) ^ 1.5
        Чем быстрее маршрут набирает активность — тем выше в списке.
@@ -56,13 +63,16 @@ async def get_recommended(
     routes = result.scalars().all()
 
     items = await _enrich_routes(db, list(routes), user_id)
-    return PaginatedResponse(
+    response = PaginatedResponse(
         items=items,
         total=total,
         page=page,
         page_size=page_size,
         pages=(total + page_size - 1) // page_size if total else 0,
     )
+    if cache_key:
+        await cache_set(cache_key, response.model_dump())
+    return response
 
 
 async def get_feed(
@@ -112,9 +122,14 @@ async def search_routes(
     page_size: int,
     user_id: Optional[uuid.UUID],
 ) -> PaginatedResponse[RouteResponse]:
-    pattern = f"%{q}%"
+    q = q.strip()
+    fts_filter = text(
+        "to_tsvector('russian', coalesce(trail_routes.title,'') || ' ' || coalesce(trail_routes.description,''))"
+        " @@ plainto_tsquery('russian', :q)"
+    ).bindparams(q=q)
+
     base_filter = and_(
-        TrailRoute.title.ilike(pattern) | TrailRoute.description.ilike(pattern),
+        fts_filter,
         TrailRoute.status == RouteStatus.published,
     )
 
@@ -148,6 +163,12 @@ async def get_regions(
     page_size: int = 20,
 ) -> "PaginatedResponse[RegionInfo]":
     from app.schemas.common import PaginatedResponse
+    from app.core.redis import cache_get, cache_set
+
+    cache_key = f"regions:{page}:{page_size}"
+    cached = await cache_get(cache_key)
+    if cached:
+        return PaginatedResponse(**cached)
 
     base_where = [
         TrailRoute.region.isnot(None),
@@ -188,13 +209,15 @@ async def get_regions(
     if regions_need_photo:
         await _fill_missing_region_photos(db, regions, regions_need_photo)
 
-    return PaginatedResponse(
+    response = PaginatedResponse(
         items=regions,
         total=total,
         page=page,
         page_size=page_size,
         pages=(total + page_size - 1) // page_size if total else 0,
     )
+    await cache_set(cache_key, response.model_dump())
+    return response
 
 
 async def _fill_missing_region_photos(

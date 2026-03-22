@@ -163,6 +163,12 @@ async def create_route(
     result = await db.execute(select(TrailRoute).where(TrailRoute.id == route.id))
     route = result.scalar_one()
     items = await _enrich_routes(db, [route], user_id)
+
+    if route.status == RouteStatus.published:
+        from app.core.redis import cache_delete_pattern
+        await cache_delete_pattern("recommended:*")
+        await cache_delete_pattern("regions:*")
+
     return items[0]
 
 
@@ -211,6 +217,11 @@ async def update_route(
     result = await db.execute(select(TrailRoute).where(TrailRoute.id == route_id))
     route = result.scalar_one()
     items = await _enrich_routes(db, [route], user_id)
+
+    from app.core.redis import cache_delete_pattern
+    await cache_delete_pattern("recommended:*")
+    await cache_delete_pattern("regions:*")
+
     return items[0]
 
 
@@ -231,6 +242,10 @@ async def delete_route(
         update(User).where(User.id == user_id).values(routes_count=User.routes_count - 1)
     )
     await db.flush()
+
+    from app.core.redis import cache_delete_pattern
+    await cache_delete_pattern("recommended:*")
+    await cache_delete_pattern("regions:*")
 
 
 async def like_route(db: AsyncSession, route_id: uuid.UUID, user_id: uuid.UUID) -> None:
