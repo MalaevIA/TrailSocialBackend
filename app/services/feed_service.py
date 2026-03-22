@@ -22,6 +22,49 @@ WIKIMEDIA_API_URL = "https://commons.wikimedia.org/w/api.php"
 WIKIMEDIA_UA = "TrailSocialApp/1.0 (https://github.com/trailsocial; trailsocial@example.com) python-httpx/0.28"
 
 
+async def get_recommended(
+    db: AsyncSession,
+    page: int,
+    page_size: int,
+    user_id: Optional[uuid.UUID] = None,
+) -> PaginatedResponse[RouteResponse]:
+    """Общие рекомендации (одинаковые для всех) по формуле Hacker News:
+       score = engagement / (возраст_в_часах + 2) ^ 1.5
+       Чем быстрее маршрут набирает активность — тем выше в списке.
+    """
+    hours_since = func.extract("epoch", func.now() - TrailRoute.created_at) / 3600.0
+    score = (
+        TrailRoute.likes_count * 3.0
+        + TrailRoute.saves_count * 5.0
+        + TrailRoute.comments_count * 2.0
+    ) / func.power(hours_since + 2, 1.5)
+
+    base_where = TrailRoute.status == RouteStatus.published
+
+    total_result = await db.execute(
+        select(func.count()).select_from(TrailRoute).where(base_where)
+    )
+    total = total_result.scalar_one()
+
+    result = await db.execute(
+        select(TrailRoute)
+        .where(base_where)
+        .order_by(score.desc(), TrailRoute.created_at.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    )
+    routes = result.scalars().all()
+
+    items = await _enrich_routes(db, list(routes), user_id)
+    return PaginatedResponse(
+        items=items,
+        total=total,
+        page=page,
+        page_size=page_size,
+        pages=(total + page_size - 1) // page_size if total else 0,
+    )
+
+
 async def get_feed(
     db: AsyncSession,
     user_id: uuid.UUID,

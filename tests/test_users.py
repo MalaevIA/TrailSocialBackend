@@ -123,3 +123,40 @@ async def test_update_me_bio_length(client, auth_headers):
         "bio": "x" * 1001,
     })
     assert resp.status_code == 422
+
+
+async def test_update_me_preferences(client, auth_headers):
+    resp = await client.put(f"{API}/me", headers=auth_headers, json={
+        "city_ids": ["moscow", "spb"],
+        "interest_ids": ["hiking", "photography"],
+        "fitness_level": "INTERMEDIATE",
+    })
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["city_ids"] == ["moscow", "spb"]
+    assert data["interest_ids"] == ["hiking", "photography"]
+    assert data["fitness_level"] == "INTERMEDIATE"
+
+
+async def test_get_me_has_preference_fields(client, auth_headers):
+    resp = await client.get(f"{API}/me", headers=auth_headers)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "city_ids" in data
+    assert "interest_ids" in data
+    assert "fitness_level" in data
+
+
+async def test_update_me_invalid_fitness_level(client, auth_headers):
+    resp = await client.put(f"{API}/me", headers=auth_headers, json={
+        "fitness_level": "SUPERHERO",
+    })
+    assert resp.status_code == 422
+
+
+async def test_update_me_avatar_url_local(client, auth_headers):
+    resp = await client.put(f"{API}/me", headers=auth_headers, json={
+        "avatar_url": "/uploads/abc123.jpg",
+    })
+    assert resp.status_code == 200
+    assert resp.json()["avatar_url"] == "/uploads/abc123.jpg"

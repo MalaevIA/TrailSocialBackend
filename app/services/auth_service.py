@@ -2,6 +2,7 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import HTTPException, status
 from sqlalchemy import select, delete
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -122,8 +123,13 @@ async def logout(db: AsyncSession, refresh_token: str) -> None:
     if not payload or payload.get("type") != "refresh":
         return
     jti = payload.get("jti")
-    if jti and not await _is_blacklisted(db, jti):
+    if not jti:
+        return
+    try:
         await _blacklist_jti(db, jti)
+        await db.flush()
+    except IntegrityError:
+        await db.rollback()  # токен уже в блэклисте — concurrent logout, игнорируем
 
 
 async def cleanup_expired_tokens(db: AsyncSession) -> int:

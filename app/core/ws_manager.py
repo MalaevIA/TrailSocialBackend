@@ -10,8 +10,8 @@ class ConnectionManager:
     def __init__(self):
         self._connections: dict[uuid.UUID, list[WebSocket]] = defaultdict(list)
 
-    async def connect(self, user_id: uuid.UUID, ws: WebSocket):
-        await ws.accept()
+    def connect(self, user_id: uuid.UUID, ws: WebSocket) -> None:
+        """Регистрирует уже принятое (accepted) соединение."""
         self._connections[user_id].append(ws)
 
     def disconnect(self, user_id: uuid.UUID, ws: WebSocket):

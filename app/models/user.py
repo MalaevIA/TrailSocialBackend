@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime, timezone
 
 from sqlalchemy import String, Text, DateTime, ForeignKey, Integer, Boolean
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import UUID, ARRAY
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -20,6 +20,9 @@ class User(Base):
     display_name: Mapped[str] = mapped_column(String(100), nullable=False)
     bio: Mapped[str | None] = mapped_column(Text, nullable=True)
     avatar_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    fitness_level: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    city_ids: Mapped[list[str]] = mapped_column(ARRAY(String), nullable=False, default=list, server_default="{}")
+    interest_ids: Mapped[list[str]] = mapped_column(ARRAY(String), nullable=False, default=list, server_default="{}")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     token_version: Mapped[int] = mapped_column(Integer, default=0, nullable=False, server_default="0")

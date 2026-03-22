@@ -53,7 +53,7 @@ async def ws_notifications(ws: WebSocket):
         await ws.close(code=4001, reason="Unauthorized")
         return
 
-    await ws_manager.connect(user_id, ws)
+    ws_manager.connect(user_id, ws)
     try:
         while True:
             # Держим соединение открытым, клиент может слать ping / keep-alive
