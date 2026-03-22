@@ -9,6 +9,12 @@ from app.models.route import Difficulty, RouteStatus
 from app.schemas.user import UserPublic
 
 
+class RegionInfo(BaseModel):
+    name: str
+    route_count: int
+    photo_url: Optional[str] = None
+
+
 class SortOrder(str, enum.Enum):
     recent = "recent"
     popular = "popular"

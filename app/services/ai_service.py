@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import math
 import uuid
 from dataclasses import dataclass
 from typing import Optional
@@ -26,23 +27,41 @@ SYSTEM_PROMPT = """Ты — помощник для приложения Trail S
 ## Важно
 
 Ты НЕ генерируешь координаты. Координаты будут получены автоматически через геокодер.
-Вместо координат ты указываешь **названия реальных мест** (улицы, парки, достопримечательности, точки на тропе).
+Вместо координат ты указываешь **точные адреса реальных мест**.
 
-## Правила
+## Правила для waypoints (КРИТИЧЕСКИ ВАЖНО)
 
-1. Предлагай реально существующие места в указанном регионе.
-2. Waypoints — это ключевые точки маршрута (начало, интересные места, конец). Минимум 3, максимум 8.
-3. Каждый waypoint должен иметь уникальное, конкретное название, по которому геокодер найдёт это место.
-   - Хорошо: "Красная площадь, Москва", "Парк Зарядье, Москва"
-   - Плохо: "Начало маршрута", "Интересная точка"
-4. Указывай город/регион в названии waypoint для точности геокодинга.
-5. Набор высоты должен соответствовать сложности и рельефу региона.
-6. Длительность и дистанция должны быть согласованы:
+Waypoints — это ключевые точки маршрута (начало, интересные места, конец). Минимум 3, максимум 8.
+
+Каждый waypoint.name — это ТОЧНЫЙ АДРЕС для геокодера. Геокодер ищет по всему миру, поэтому без точного адреса он найдёт ДРУГОЕ место!
+
+Формат name: "<Объект>, <Улица/Район>, <Город>, <Область/Регион>, Россия"
+
+Примеры ПРАВИЛЬНЫХ name:
+- "Парк Зарядье, улица Варварка, Москва, Россия"
+- "Центральный вход в парк Горького, Крымский Вал 9, Москва, Россия"
+- "Приют Гремучий ключ, национальный парк Таганай, Златоуст, Челябинская область, Россия"
+- "Водопад Поликаря, Красная Поляна, Сочи, Краснодарский край, Россия"
+- "Станция канатной дороги Роза Хутор, Эстосадок, Сочи, Краснодарский край, Россия"
+- "Озеро Тургояк, посёлок Тургояк, Миасс, Челябинская область, Россия"
+
+Примеры НЕПРАВИЛЬНЫХ name (ЗАПРЕЩЕНО):
+- "Красная площадь" — нет города, найдёт другой город
+- "Озеро Тургояк" — нет района/области, найдёт однофамильца
+- "Начало маршрута" — это не адрес
+- "Смотровая площадка" — нет привязки к месту
+- "Парк Горького" — без улицы/города, есть во многих городах
+
+## Остальные правила
+
+1. Предлагай ТОЛЬКО реально существующие места в указанном регионе.
+2. Набор высоты должен соответствовать сложности и рельефу региона.
+3. Длительность и дистанция должны быть согласованы:
    - easy: 3–4 км/ч
    - moderate: 2.5–3.5 км/ч
    - hard: 2–3 км/ч
    - expert: 1.5–2.5 км/ч
-7. Весь текст — на русском языке.
+4. Весь текст — на русском языке.
 
 ## Формат ответа
 
@@ -60,7 +79,7 @@ SYSTEM_PROMPT = """Ты — помощник для приложения Trail S
   "highlights": ["string", "string", "string"],
   "tips": ["string", "string", "string", "string"],
   "waypoints": [
-    {"name": "string — точное название места с городом/регионом", "description": "string или null"}
+    {"name": "string — ТОЧНЫЙ АДРЕС: Объект, Улица, Город, Область, Россия", "description": "string или null"}
   ]
 }"""
 
@@ -100,15 +119,40 @@ def _is_openai_compat(model: str) -> bool:
 # Geocoding (Yandex Geocoder API)
 # ---------------------------------------------------------------------------
 
-async def _geocode(client: httpx.AsyncClient, place_name: str) -> Optional[tuple[float, float]]:
-    """Geocode a place name → (lat, lng) using Yandex Geocoder."""
+def _haversine_km(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
+    """Calculate distance in km between two points using Haversine formula."""
+    R = 6371.0
+    rlat1, rlat2 = math.radians(lat1), math.radians(lat2)
+    dlat = math.radians(lat2 - lat1)
+    dlng = math.radians(lng2 - lng1)
+    a = math.sin(dlat / 2) ** 2 + math.cos(rlat1) * math.cos(rlat2) * math.sin(dlng / 2) ** 2
+    return R * 2 * math.asin(math.sqrt(a))
+
+
+async def _geocode(
+    client: httpx.AsyncClient,
+    place_name: str,
+    center: Optional[tuple[float, float]] = None,
+    spn: str = "2.0,2.0",
+) -> Optional[tuple[float, float]]:
+    """Geocode a place name → (lat, lng) using Yandex Geocoder.
+
+    If center (lat, lng) is provided, biases results toward that location.
+    spn controls the search area size (default "2.0,2.0" ≈ 200km).
+    """
     try:
-        resp = await client.get(YANDEX_GEOCODER_URL, params={
+        params = {
             "apikey": settings.YANDEX_GEOCODER_API_KEY,
             "geocode": place_name,
             "format": "json",
             "results": 1,
-        })
+        }
+        if center is not None:
+            lat, lng = center
+            params["ll"] = f"{lng},{lat}"
+            params["spn"] = spn
+            params["rspn"] = "1"
+        resp = await client.get(YANDEX_GEOCODER_URL, params=params)
         resp.raise_for_status()
         data = resp.json()
         members = data["response"]["GeoObjectCollection"]["featureMember"]
@@ -126,19 +170,113 @@ async def _geocode(client: httpx.AsyncClient, place_name: str) -> Optional[tuple
 async def _geocode_waypoints(
     client: httpx.AsyncClient,
     waypoints: list[dict],
+    region: Optional[str] = None,
+    expected_distance_km: Optional[float] = None,
 ) -> list[dict]:
-    """Geocode all waypoints in parallel, skip those that fail."""
-    tasks = [_geocode(client, wp["name"]) for wp in waypoints]
+    """Geocode all waypoints, then detect and fix outliers via re-geocoding.
+
+    1. Geocode the first waypoint (optionally biased by region name).
+    2. Use the first waypoint's coordinates as center for the rest.
+    3. Detect outliers and try to fix them with tighter geocoder bias.
+    """
+    if not waypoints:
+        return []
+
+    # Step 1: geocode first waypoint to establish region center
+    first_query = waypoints[0]["name"]
+    if region:
+        first_query = f"{first_query}, {region}"
+    first_coords = await _geocode(client, first_query)
+    center = first_coords  # may be None
+
+    # Step 2: geocode remaining waypoints biased toward center
+    tasks = [_geocode(client, wp["name"], center=center) for wp in waypoints[1:]]
     results = await asyncio.gather(*tasks)
 
     geocoded = []
-    for wp, coords in zip(waypoints, results):
+    if first_coords is not None:
+        geocoded.append({**waypoints[0], "lat": first_coords[0], "lng": first_coords[1]})
+    for wp, coords in zip(waypoints[1:], results):
         if coords is not None:
-            lat, lng = coords
-            geocoded.append({**wp, "lat": lat, "lng": lng})
+            geocoded.append({**wp, "lat": coords[0], "lng": coords[1]})
         else:
             logger.warning("Skipping waypoint '%s' — geocoding failed", wp["name"])
+
+    # Step 3: detect outliers and try to fix them with tighter geocoder bias
+    if len(geocoded) >= 2:
+        geocoded = await _fix_outlier_waypoints(client, geocoded, region, expected_distance_km)
+
     return geocoded
+
+
+# Default max distance from median center (km) — used when route distance is unknown
+DEFAULT_MAX_SPREAD_KM = 5.0
+
+
+def _get_median_center(waypoints: list[dict]) -> tuple[float, float]:
+    """Calculate the median center of a list of waypoints."""
+    lats = sorted(wp["lat"] for wp in waypoints)
+    lngs = sorted(wp["lng"] for wp in waypoints)
+    return lats[len(lats) // 2], lngs[len(lngs) // 2]
+
+
+async def _fix_outlier_waypoints(
+    client: httpx.AsyncClient,
+    waypoints: list[dict],
+    region: Optional[str],
+    expected_distance_km: Optional[float],
+) -> list[dict]:
+    """Detect waypoints that are too far from the group and re-geocode them.
+
+    Threshold = max(5, expected_distance_km) if distance is known, else 5 km.
+    For outliers: re-geocode with region suffix and tight spn (0.1° ≈ 10km).
+    If still an outlier — remove.
+    """
+    max_spread = DEFAULT_MAX_SPREAD_KM
+    if expected_distance_km and expected_distance_km > DEFAULT_MAX_SPREAD_KM:
+        max_spread = expected_distance_km
+
+    center_lat, center_lng = _get_median_center(waypoints)
+
+    result = []
+    for wp in waypoints:
+        dist = _haversine_km(center_lat, center_lng, wp["lat"], wp["lng"])
+        if dist <= max_spread:
+            result.append(wp)
+            continue
+
+        # Outlier detected — try re-geocoding with region context and tight bias
+        logger.info(
+            "Outlier '%s': %.1f km from center (max %.1f km), re-geocoding...",
+            wp["name"], dist, max_spread,
+        )
+        query = wp["name"]
+        if region and region.lower() not in query.lower():
+            query = f"{query}, {region}"
+
+        new_coords = await _geocode(
+            client, query, center=(center_lat, center_lng), spn="0.1,0.1",
+        )
+        if new_coords:
+            new_dist = _haversine_km(center_lat, center_lng, new_coords[0], new_coords[1])
+            if new_dist <= max_spread:
+                wp["lat"] = new_coords[0]
+                wp["lng"] = new_coords[1]
+                result.append(wp)
+                logger.info(
+                    "Re-geocoded '%s': %.1f km -> %.1f km from center",
+                    wp["name"], dist, new_dist,
+                )
+                continue
+            else:
+                logger.warning(
+                    "Re-geocoded '%s' still too far: %.1f km (max %.1f km), removing",
+                    wp["name"], new_dist, max_spread,
+                )
+        else:
+            logger.warning("Re-geocoding failed for '%s', removing", wp["name"])
+
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -176,6 +314,87 @@ async def _build_route_geometry(
     except Exception as e:
         logger.error("OSRM routing failed: %s", e)
         return None
+
+
+# ---------------------------------------------------------------------------
+# Photo fetching from Wikimedia Commons by waypoint coordinates
+# ---------------------------------------------------------------------------
+
+WIKIMEDIA_API_URL = "https://commons.wikimedia.org/w/api.php"
+WIKIMEDIA_SEARCH_RADIUS = 500  # meters
+
+
+async def _fetch_photos_near(
+    client: httpx.AsyncClient,
+    lat: float,
+    lng: float,
+) -> list[str]:
+    """Fetch photo URLs from Wikimedia Commons near a coordinate (500m radius)."""
+    try:
+        # Step 1: find images geotagged near the coordinate
+        resp = await client.get(WIKIMEDIA_API_URL, params={
+            "action": "query",
+            "generator": "geosearch",
+            "ggscoord": f"{lat}|{lng}",
+            "ggsradius": WIKIMEDIA_SEARCH_RADIUS,
+            "ggsnamespace": 6,  # File namespace
+            "ggslimit": 5,
+            "prop": "imageinfo",
+            "iiprop": "url|mime",
+            "iiurlwidth": 1200,
+            "format": "json",
+        })
+        resp.raise_for_status()
+        data = resp.json()
+
+        pages = data.get("query", {}).get("pages", {})
+        if not pages:
+            return []
+
+        urls = []
+        for page in pages.values():
+            imageinfo = page.get("imageinfo", [])
+            if not imageinfo:
+                continue
+            info = imageinfo[0]
+            mime = info.get("mime", "")
+            if not mime.startswith("image/"):
+                continue
+            # Prefer thumbnail (1200px wide) over original
+            url = info.get("thumburl") or info.get("url")
+            if url:
+                urls.append(url)
+        return urls
+    except Exception as e:
+        logger.error("Wikimedia photo fetch failed for (%.4f, %.4f): %s", lat, lng, e)
+        return []
+
+
+async def _fetch_photos_for_waypoints(
+    waypoints: list[dict],
+    limit: int = 5,
+) -> list[str]:
+    """Fetch photos from Wikimedia Commons for all waypoints in parallel."""
+    if not waypoints:
+        return []
+
+    async with httpx.AsyncClient(timeout=15.0, headers={
+        "User-Agent": "TrailSocialApp/1.0 (https://github.com/trailsocial; trailsocial@example.com) python-httpx/0.28",
+    }) as client:
+        tasks = [_fetch_photos_near(client, wp["lat"], wp["lng"]) for wp in waypoints]
+        results = await asyncio.gather(*tasks)
+
+    # Flatten, deduplicate, limit
+    seen = set()
+    photos = []
+    for photo_list in results:
+        for url in photo_list:
+            if url not in seen:
+                seen.add(url)
+                photos.append(url)
+                if len(photos) >= limit:
+                    return photos
+    return photos
 
 
 # ---------------------------------------------------------------------------
@@ -245,9 +464,17 @@ async def _generate_route(form: RouteBuilderForm) -> GeneratedRoute:
     if len(raw_waypoints) < 2:
         raise HTTPException(status_code=502, detail="AI returned too few waypoints")
 
+    # Determine region for geocoder bias
+    region_hint = ai_data.get("region") or form.region
+
+    # Use AI-suggested distance for outlier detection threshold
+    expected_distance_km = ai_data.get("distance_km") or (form.distance_km if form.distance_km else None)
+
     async with httpx.AsyncClient(timeout=30.0) as client:
-        # Step 2: Geocode waypoint names → coordinates
-        geocoded_waypoints = await _geocode_waypoints(client, raw_waypoints)
+        # Step 2: Geocode waypoint names → coordinates (biased by region)
+        geocoded_waypoints = await _geocode_waypoints(
+            client, raw_waypoints, region=region_hint, expected_distance_km=expected_distance_km,
+        )
 
         if len(geocoded_waypoints) < 2:
             raise HTTPException(
@@ -262,12 +489,16 @@ async def _generate_route(form: RouteBuilderForm) -> GeneratedRoute:
     if geometry:
         _snap_waypoints_to_geometry(geocoded_waypoints, geometry["coordinates"])
 
+    # Step 4: Fetch real photos from Wikimedia Commons near waypoints
+    photos = await _fetch_photos_for_waypoints(geocoded_waypoints)
+
     # Build final response
     ai_data["waypoints"] = [
         {"lat": wp["lat"], "lng": wp["lng"], "name": wp["name"], "description": wp.get("description")}
         for wp in geocoded_waypoints
     ]
     ai_data["geometry"] = geometry
+    ai_data["photos"] = photos
 
     return GeneratedRoute(**ai_data)
 

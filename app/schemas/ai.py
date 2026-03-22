@@ -28,6 +28,7 @@ class GeneratedRoute(BaseModel):
     tips: List[str]
     geometry: Optional[GeoJSONLineString] = None
     waypoints: Optional[List[Waypoint]] = None
+    photos: Optional[List[str]] = None
 
 
 class TaskCreated(BaseModel):

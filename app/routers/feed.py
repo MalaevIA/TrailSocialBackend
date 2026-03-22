@@ -2,7 +2,7 @@ from fastapi import APIRouter
 
 from app.dependencies import DbSession, CurrentUser, OptionalUser
 from app.schemas.common import PaginatedResponse
-from app.schemas.route import RouteResponse
+from app.schemas.route import RegionInfo, RouteResponse
 from app.schemas.user import UserProfile
 from app.services import feed_service
 
@@ -43,6 +43,6 @@ async def search_users(
     return await feed_service.search_users(db, q, page, page_size, opt_id)
 
 
-@router.get("/regions", response_model=list[str])
+@router.get("/regions", response_model=list[RegionInfo])
 async def get_regions(db: DbSession):
     return await feed_service.get_regions(db)
