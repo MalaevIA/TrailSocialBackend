@@ -22,6 +22,7 @@ class User(Base):
     avatar_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    token_version: Mapped[int] = mapped_column(Integer, default=0, nullable=False, server_default="0")
     followers_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     following_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     routes_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)

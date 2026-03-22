@@ -65,3 +65,61 @@ async def test_follow_unfollow(client, test_user, second_user, auth_headers, sec
 async def test_follow_self(client, test_user, auth_headers):
     resp = await client.post(f"{API}/{test_user.id}/follow", headers=auth_headers)
     assert resp.status_code == 400
+
+
+async def test_change_email(client, auth_headers):
+    resp = await client.put(f"{API}/me/email", headers=auth_headers, json={
+        "new_email": "newemail@example.com",
+        "password": "password123",
+    })
+    assert resp.status_code == 204
+
+
+async def test_change_email_wrong_password(client, auth_headers):
+    resp = await client.put(f"{API}/me/email", headers=auth_headers, json={
+        "new_email": "another@example.com",
+        "password": "wrongpassword",
+    })
+    assert resp.status_code == 400
+
+
+async def test_change_email_duplicate(client, second_user, auth_headers):
+    resp = await client.put(f"{API}/me/email", headers=auth_headers, json={
+        "new_email": second_user.email,
+        "password": "password123",
+    })
+    assert resp.status_code == 409
+
+
+async def test_delete_account(client, db, auth_headers, test_user):
+    resp = await client.request("DELETE", f"{API}/me", headers=auth_headers, json={
+        "current_password": "password123",
+        "new_password": "irrelevant",
+    })
+    assert resp.status_code == 204
+
+    # Повторный запрос должен вернуть 401 (пользователь удалён)
+    resp = await client.get(f"{API}/me", headers=auth_headers)
+    assert resp.status_code == 401
+
+
+async def test_delete_account_wrong_password(client, auth_headers):
+    resp = await client.request("DELETE", f"{API}/me", headers=auth_headers, json={
+        "current_password": "wrongpassword",
+        "new_password": "irrelevant",
+    })
+    assert resp.status_code == 400
+
+
+async def test_update_me_invalid_avatar_url(client, auth_headers):
+    resp = await client.put(f"{API}/me", headers=auth_headers, json={
+        "avatar_url": "javascript:alert(1)",
+    })
+    assert resp.status_code == 422
+
+
+async def test_update_me_bio_length(client, auth_headers):
+    resp = await client.put(f"{API}/me", headers=auth_headers, json={
+        "bio": "x" * 1001,
+    })
+    assert resp.status_code == 422

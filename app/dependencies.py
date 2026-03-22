@@ -58,6 +58,16 @@ async def _get_user_from_credentials(
             )
         return None
 
+    # Проверяем token_version: при бане или принудительном логауте версия инкрементируется,
+    # что немедленно инвалидирует все выданные access-токены.
+    if payload.get("tv", 0) != user.token_version:
+        if required:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Token has been revoked",
+            )
+        return None
+
     return user
 
 

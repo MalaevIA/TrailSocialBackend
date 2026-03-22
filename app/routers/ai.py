@@ -1,5 +1,7 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 
+from app.core.limiter import limiter
+from app.dependencies import CurrentUser
 from app.schemas.ai import RouteBuilderForm, GeneratedRoute, TaskCreated, TaskStatus
 from app.services import ai_service
 
@@ -7,7 +9,8 @@ router = APIRouter(prefix="/ai", tags=["ai"])
 
 
 @router.post("/generate-route", response_model=TaskCreated)
-async def generate_route(form: RouteBuilderForm):
+@limiter.limit("10/hour")
+async def generate_route(request: Request, form: RouteBuilderForm, current_user: CurrentUser):
     task_id = ai_service.create_task(form)
     return TaskCreated(task_id=task_id)
 

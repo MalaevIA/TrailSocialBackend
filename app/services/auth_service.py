@@ -51,7 +51,7 @@ async def signup(db: AsyncSession, data: SignupRequest) -> TokenResponse:
 
     refresh_token, _ = create_refresh_token(str(user.id))
     return TokenResponse(
-        access_token=create_access_token(str(user.id)),
+        access_token=create_access_token(str(user.id), token_version=user.token_version),
         refresh_token=refresh_token,
     )
 
@@ -70,7 +70,7 @@ async def login(db: AsyncSession, data: LoginRequest) -> TokenResponse:
 
     refresh_token, _ = create_refresh_token(str(user.id))
     return TokenResponse(
-        access_token=create_access_token(str(user.id)),
+        access_token=create_access_token(str(user.id), token_version=user.token_version),
         refresh_token=refresh_token,
     )
 
@@ -111,7 +111,7 @@ async def refresh_tokens(db: AsyncSession, refresh_token: str) -> TokenResponse:
     await _blacklist_jti(db, jti)
     new_refresh_token, _ = create_refresh_token(str(user.id))
     return TokenResponse(
-        access_token=create_access_token(str(user.id)),
+        access_token=create_access_token(str(user.id), token_version=user.token_version),
         refresh_token=new_refresh_token,
     )
 

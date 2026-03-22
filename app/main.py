@@ -1,3 +1,5 @@
+import asyncio
+import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -12,15 +14,38 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
 from app.core.config import settings
-from app.core.database import engine
+from app.core.database import engine, AsyncSessionLocal
 from app.core.limiter import limiter
 from app.routers import auth, users, routes, comments, feed, ai, notifications, upload, ws, reports, admin
+
+logger = logging.getLogger(__name__)
+
+_CLEANUP_INTERVAL_SECONDS = settings.TOKEN_CLEANUP_INTERVAL_SECONDS
+
+
+async def _cleanup_loop() -> None:
+    """Фоновая задача: удаляет истёкшие записи из token_blacklist раз в час."""
+    from app.services.auth_service import cleanup_expired_tokens
+    while True:
+        await asyncio.sleep(_CLEANUP_INTERVAL_SECONDS)
+        try:
+            async with AsyncSessionLocal() as db:
+                deleted = await cleanup_expired_tokens(db)
+                await db.commit()
+                if deleted:
+                    logger.info("token_blacklist cleanup: removed %d expired entries", deleted)
+        except Exception:
+            logger.exception("token_blacklist cleanup failed")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    yield
-    await engine.dispose()
+    cleanup_task = asyncio.create_task(_cleanup_loop())
+    try:
+        yield
+    finally:
+        cleanup_task.cancel()
+        await engine.dispose()
 
 
 app = FastAPI(
@@ -43,12 +68,24 @@ app.add_middleware(
 )
 
 
+def _make_json_safe(obj):
+    """Рекурсивно преобразует объекты в JSON-сериализуемые типы.
+    Нужно для Pydantic v2, который кладёт Exception-объекты в ctx полях ошибок."""
+    if isinstance(obj, dict):
+        return {k: _make_json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_make_json_safe(v) for v in obj]
+    if isinstance(obj, Exception):
+        return str(obj)
+    return obj
+
+
 # Exception handlers
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     return JSONResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-        content={"detail": exc.errors(), "body": exc.body},
+        content=_make_json_safe({"detail": exc.errors(), "body": exc.body}),
     )
 
 

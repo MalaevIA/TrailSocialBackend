@@ -1,6 +1,6 @@
 import uuid
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 
 from app.dependencies import DbSession, CurrentUser
 from app.schemas.common import PaginatedResponse
@@ -14,8 +14,8 @@ router = APIRouter(prefix="/notifications", tags=["notifications"])
 async def list_notifications(
     current_user: CurrentUser,
     db: DbSession,
-    page: int = 1,
-    page_size: int = 20,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
     unread_only: bool = False,
 ):
     return await notification_service.list_notifications(

@@ -195,9 +195,52 @@ async def change_password(
         .where(User.id == user.id)
         .values(
             hashed_password=hash_password(new_password),
+            token_version=User.token_version + 1,
             updated_at=datetime.now(timezone.utc),
         )
     )
+    await db.flush()
+
+
+async def change_email(
+    db: AsyncSession,
+    user: User,
+    new_email: str,
+    password: str,
+) -> None:
+    from app.core.security import verify_password
+
+    if not verify_password(password, user.hashed_password):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Password is incorrect",
+        )
+
+    result = await db.execute(select(User).where(User.email == new_email))
+    if result.scalar_one_or_none():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Email already in use",
+        )
+
+    await db.execute(
+        update(User)
+        .where(User.id == user.id)
+        .values(email=new_email, updated_at=datetime.now(timezone.utc))
+    )
+    await db.flush()
+
+
+async def delete_account(db: AsyncSession, user: User, password: str) -> None:
+    from app.core.security import verify_password
+
+    if not verify_password(password, user.hashed_password):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Password is incorrect",
+        )
+
+    await db.delete(user)
     await db.flush()
 
 

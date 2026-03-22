@@ -66,7 +66,9 @@ async def ban_user(db: AsyncSession, user_id: uuid.UUID) -> UserPublic:
 
     await db.execute(
         update(User).where(User.id == user_id).values(
-            is_active=False, updated_at=datetime.now(timezone.utc)
+            is_active=False,
+            token_version=User.token_version + 1,
+            updated_at=datetime.now(timezone.utc),
         )
     )
     await db.flush()

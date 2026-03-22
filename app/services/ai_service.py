@@ -4,7 +4,7 @@ import logging
 import math
 import uuid
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, TypeVar, Callable, Awaitable
 
 import httpx
 from fastapi import HTTPException
@@ -18,6 +18,33 @@ YANDEX_GPT_URL = "https://llm.api.cloud.yandex.net/foundationModels/v1/completio
 YANDEX_OPENAI_URL = "https://llm.api.cloud.yandex.net/v1/chat/completions"
 YANDEX_GEOCODER_URL = "https://geocode-maps.yandex.ru/1.x/"
 OSRM_ROUTE_URL = "https://router.project-osrm.org/route/v1/foot"
+
+T = TypeVar("T")
+
+_RETRY_ATTEMPTS = 3
+_RETRY_BACKOFF = 1.5  # секунды между попытками
+
+
+async def _with_retry(
+    fn: Callable[[], Awaitable[T]],
+    attempts: int = _RETRY_ATTEMPTS,
+    backoff: float = _RETRY_BACKOFF,
+    label: str = "",
+) -> T:
+    """Повторяет fn до attempts раз при httpx.HTTPError или TimeoutException."""
+    last_exc: Exception = RuntimeError("No attempts made")
+    for attempt in range(1, attempts + 1):
+        try:
+            return await fn()
+        except (httpx.TimeoutException, httpx.NetworkError) as e:
+            last_exc = e
+            if attempt < attempts:
+                wait = backoff * attempt
+                logger.warning("%s: attempt %d/%d failed (%s), retrying in %.1fs", label, attempt, attempts, e, wait)
+                await asyncio.sleep(wait)
+            else:
+                logger.error("%s: all %d attempts failed: %s", label, attempts, e)
+    raise last_exc
 
 # Models that require OpenAI-compatible API instead of gRPC
 OPENAI_COMPAT_MODELS = {"qwen3-235b-a22b-fp8", "deepseek-v32", "gemma-3-27b-it", "gpt-oss-120b", "gpt-oss-20b"}
@@ -152,9 +179,13 @@ async def _geocode(
             params["ll"] = f"{lng},{lat}"
             params["spn"] = spn
             params["rspn"] = "1"
-        resp = await client.get(YANDEX_GEOCODER_URL, params=params)
-        resp.raise_for_status()
-        data = resp.json()
+
+        async def _do_geocode():
+            resp = await client.get(YANDEX_GEOCODER_URL, params=params)
+            resp.raise_for_status()
+            return resp.json()
+
+        data = await _with_retry(_do_geocode, label=f"Geocoder({place_name})")
         members = data["response"]["GeoObjectCollection"]["featureMember"]
         if not members:
             logger.warning("Geocoder: no results for '%s'", place_name)
@@ -295,12 +326,14 @@ async def _build_route_geometry(
     url = f"{OSRM_ROUTE_URL}/{coords_str}"
 
     try:
-        resp = await client.get(url, params={
-            "overview": "full",
-            "geometries": "geojson",
-        })
-        resp.raise_for_status()
-        data = resp.json()
+        osrm_params = {"overview": "full", "geometries": "geojson"}
+
+        async def _do_osrm():
+            resp = await client.get(url, params=osrm_params)
+            resp.raise_for_status()
+            return resp.json()
+
+        data = await _with_retry(_do_osrm, label="OSRM")
 
         if data.get("code") != "Ok" or not data.get("routes"):
             logger.error("OSRM error: %s", data.get("code"))

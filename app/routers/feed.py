@@ -1,4 +1,4 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 
 from app.dependencies import DbSession, CurrentUser, OptionalUser
 from app.schemas.common import PaginatedResponse
@@ -13,8 +13,8 @@ router = APIRouter(tags=["feed"])
 async def get_feed(
     current_user: CurrentUser,
     db: DbSession,
-    page: int = 1,
-    page_size: int = 20,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
 ):
     return await feed_service.get_feed(db, current_user.id, page, page_size)
 
@@ -24,8 +24,8 @@ async def search(
     q: str,
     db: DbSession,
     current_user: OptionalUser,
-    page: int = 1,
-    page_size: int = 20,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
 ):
     opt_id = current_user.id if current_user else None
     return await feed_service.search_routes(db, q, page, page_size, opt_id)
@@ -36,13 +36,17 @@ async def search_users(
     q: str,
     db: DbSession,
     current_user: OptionalUser,
-    page: int = 1,
-    page_size: int = 20,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
 ):
     opt_id = current_user.id if current_user else None
     return await feed_service.search_users(db, q, page, page_size, opt_id)
 
 
-@router.get("/regions", response_model=list[RegionInfo])
-async def get_regions(db: DbSession):
-    return await feed_service.get_regions(db)
+@router.get("/regions", response_model=PaginatedResponse[RegionInfo])
+async def get_regions(
+    db: DbSession,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+):
+    return await feed_service.get_regions(db, page, page_size)

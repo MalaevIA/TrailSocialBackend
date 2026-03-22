@@ -99,20 +99,36 @@ async def search_routes(
     )
 
 
-async def get_regions(db: AsyncSession) -> list[RegionInfo]:
-    # Count published routes per region + pick first photo
+async def get_regions(
+    db: AsyncSession,
+    page: int = 1,
+    page_size: int = 20,
+) -> "PaginatedResponse[RegionInfo]":
+    from app.schemas.common import PaginatedResponse
+
+    base_where = [
+        TrailRoute.region.isnot(None),
+        TrailRoute.status == RouteStatus.published,
+    ]
+
+    # Total distinct regions
+    total_result = await db.execute(
+        select(func.count(TrailRoute.region.distinct())).where(*base_where)
+    )
+    total = total_result.scalar_one()
+
+    # Paginated rows
     result = await db.execute(
         select(
             TrailRoute.region,
             func.count().label("route_count"),
             func.min(TrailRoute.photos[1]).label("photo_url"),
         )
-        .where(
-            TrailRoute.region.isnot(None),
-            TrailRoute.status == RouteStatus.published,
-        )
+        .where(*base_where)
         .group_by(TrailRoute.region)
         .order_by(func.count().desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
     )
     rows = result.all()
 
@@ -126,11 +142,16 @@ async def get_regions(db: AsyncSession) -> list[RegionInfo]:
         if not row.photo_url:
             regions_need_photo.append(row.region)
 
-    # For regions without photos — fetch from Wikimedia, save to uploads & DB
     if regions_need_photo:
         await _fill_missing_region_photos(db, regions, regions_need_photo)
 
-    return regions
+    return PaginatedResponse(
+        items=regions,
+        total=total,
+        page=page,
+        page_size=page_size,
+        pages=(total + page_size - 1) // page_size if total else 0,
+    )
 
 
 async def _fill_missing_region_photos(

@@ -48,4 +48,5 @@ async def test_search_users(client, test_user):
 async def test_regions(client, test_route):
     resp = await client.get(f"{API}/regions")
     assert resp.status_code == 200
-    assert "TestRegion" in resp.json()
+    data = resp.json()
+    assert any(r["name"] == "TestRegion" for r in data["items"])

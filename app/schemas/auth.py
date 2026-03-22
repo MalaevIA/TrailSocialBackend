@@ -1,11 +1,13 @@
-from pydantic import BaseModel, EmailStr, field_validator
+import re
+
+from pydantic import BaseModel, EmailStr, Field, field_validator
 
 
 class SignupRequest(BaseModel):
     username: str
     email: EmailStr
     password: str
-    display_name: str
+    display_name: str = Field(..., min_length=1, max_length=100)
 
     @field_validator("username")
     @classmethod
@@ -13,13 +15,15 @@ class SignupRequest(BaseModel):
         v = v.strip()
         if len(v) < 3 or len(v) > 50:
             raise ValueError("Username must be between 3 and 50 characters")
+        if not re.match(r'^[a-zA-Z0-9_]+$', v):
+            raise ValueError("Username may only contain letters, digits, and underscores")
         return v
 
     @field_validator("password")
     @classmethod
     def password_min_length(cls, v: str) -> str:
-        if len(v) < 6:
-            raise ValueError("Password must be at least 6 characters")
+        if len(v) < 8:
+            raise ValueError("Password must be at least 8 characters")
         return v
 
 

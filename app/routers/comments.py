@@ -1,6 +1,6 @@
 import uuid
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 
 from app.dependencies import DbSession, CurrentUser, OptionalUser
 from app.schemas.comment import CommentCreate, CommentResponse
@@ -15,8 +15,8 @@ async def list_comments(
     route_id: uuid.UUID,
     db: DbSession,
     current_user: OptionalUser,
-    page: int = 1,
-    page_size: int = 20,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
 ):
     opt_id = current_user.id if current_user else None
     return await comment_service.list_comments(db, route_id, page, page_size, opt_id)
