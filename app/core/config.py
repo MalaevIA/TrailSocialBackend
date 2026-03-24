@@ -40,5 +40,11 @@ class Settings(BaseSettings):
     YANDEX_GPT_MODEL: str = "qwen3-235b-a22b-fp8/latest"
     YANDEX_GEOCODER_API_KEY: str = ""
 
+    # ЮКасса (оставить пустым чтобы отключить оплату)
+    YOOKASSA_SHOP_ID: str = ""
+    YOOKASSA_SECRET_KEY: str = ""
+    # Процент платформы от каждой подписки (остаток уходит автору)
+    PLATFORM_FEE_PERCENT: int = 10
+
 
 settings = Settings()

@@ -2,7 +2,7 @@ import uuid
 import enum
 from datetime import datetime, timezone
 
-from sqlalchemy import String, Text, DateTime, ForeignKey, Integer, Float, Enum
+from sqlalchemy import String, Text, DateTime, ForeignKey, Integer, Float, Enum, Boolean
 from sqlalchemy.dialects.postgresql import UUID, ARRAY, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -54,6 +54,8 @@ class TrailRoute(Base):
     end_lng: Mapped[float] = mapped_column(Float, nullable=False)
     geometry: Mapped[dict] = mapped_column(JSONB, nullable=False)
     waypoints: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    is_paid: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, server_default="false")
+    preview_description: Mapped[str | None] = mapped_column(Text, nullable=True)
     likes_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     saves_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     comments_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)

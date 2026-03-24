@@ -4,6 +4,7 @@ from app.models.comment import Comment, CommentLike
 from app.models.notification import Notification, NotificationType
 from app.models.token_blacklist import TokenBlacklist
 from app.models.report import Report
+from app.models.subscription import SubscriptionPlan, CreatorSubscription, Payment
 
 __all__ = [
     "User",
@@ -16,4 +17,7 @@ __all__ = [
     "Notification",
     "NotificationType",
     "Report",
+    "SubscriptionPlan",
+    "CreatorSubscription",
+    "Payment",
 ]

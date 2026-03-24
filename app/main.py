@@ -16,7 +16,7 @@ from slowapi.errors import RateLimitExceeded
 from app.core.config import settings
 from app.core.database import engine, AsyncSessionLocal
 from app.core.limiter import limiter
-from app.routers import auth, users, routes, comments, feed, ai, notifications, upload, ws, reports, admin
+from app.routers import auth, users, routes, comments, feed, ai, notifications, upload, ws, reports, admin, subscriptions, payments
 
 logger = logging.getLogger(__name__)
 
@@ -110,6 +110,8 @@ app.include_router(notifications.router, prefix=API_PREFIX)
 app.include_router(upload.router, prefix=API_PREFIX)
 app.include_router(reports.router, prefix=API_PREFIX)
 app.include_router(admin.router, prefix=API_PREFIX)
+app.include_router(subscriptions.router, prefix=API_PREFIX)
+app.include_router(payments.router, prefix=API_PREFIX)
 app.include_router(ws.router)
 
 # Static files — раздача загруженных изображений

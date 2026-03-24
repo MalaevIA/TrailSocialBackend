@@ -34,6 +34,8 @@ async def _enrich_routes(
 
     liked_set: set[uuid.UUID] = set()
     saved_set: set[uuid.UUID] = set()
+    # author_ids для которых у user_id есть активная подписка
+    subscribed_creator_ids: set[uuid.UUID] = set()
 
     if user_id:
         result = await db.execute(
@@ -52,12 +54,37 @@ async def _enrich_routes(
         )
         saved_set = {row for row in result.scalars().all()}
 
+        # Bulk-проверка подписок на авторов платных маршрутов
+        paid_author_ids = {r.author_id for r in routes if r.is_paid and r.author_id != user_id}
+        if paid_author_ids:
+            from app.models.subscription import CreatorSubscription, SubscriptionStatus
+            now = datetime.now(timezone.utc)
+            result = await db.execute(
+                select(CreatorSubscription.creator_id).where(
+                    CreatorSubscription.subscriber_id == user_id,
+                    CreatorSubscription.creator_id.in_(paid_author_ids),
+                    CreatorSubscription.status == SubscriptionStatus.active,
+                    CreatorSubscription.expires_at > now,
+                )
+            )
+            subscribed_creator_ids = {row for row in result.scalars().all()}
+
     enriched = []
     for route in routes:
         data = RouteResponse.model_validate(route)
         data.author = authors[route.author_id]
         data.is_liked = route.id in liked_set
         data.is_saved = route.id in saved_set
+
+        # Проверка блокировки платного маршрута
+        is_owner = user_id is not None and route.author_id == user_id
+        is_subscribed = route.author_id in subscribed_creator_ids
+        if route.is_paid and not is_owner and not is_subscribed:
+            data.is_locked = True
+            data.description = None
+            data.geometry = None
+            data.waypoints = None
+
         enriched.append(data)
 
     return enriched

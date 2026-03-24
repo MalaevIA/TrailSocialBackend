@@ -59,6 +59,8 @@ class RouteCreate(BaseModel):
     title: str
     status: RouteStatus = RouteStatus.published
     description: Optional[str] = None
+    preview_description: Optional[str] = None
+    is_paid: bool = False
     region: Optional[str] = None
     distance_km: Optional[float] = None
     elevation_gain_m: Optional[float] = None
@@ -78,6 +80,8 @@ class RouteUpdate(BaseModel):
     title: Optional[str] = None
     status: Optional[RouteStatus] = None
     description: Optional[str] = None
+    preview_description: Optional[str] = None
+    is_paid: Optional[bool] = None
     region: Optional[str] = None
     distance_km: Optional[float] = None
     elevation_gain_m: Optional[float] = None
@@ -99,18 +103,24 @@ class RouteResponse(BaseModel):
     id: uuid.UUID
     title: str
     status: RouteStatus
+    is_paid: bool = False
+    # Для незаблокированных — полное описание; для заблокированных — None
     description: Optional[str]
+    # Краткое описание-тизер для незаподписчиков (всегда видно)
+    preview_description: Optional[str] = None
     region: Optional[str]
     distance_km: Optional[float]
     elevation_gain_m: Optional[float]
     duration_minutes: Optional[int]
     difficulty: Optional[Difficulty]
+    # Фото присутствуют всегда; клиент применяет blur если is_locked=True
     photos: Optional[List[str]]
     tags: Optional[List[str]]
     start_lat: Optional[float]
     start_lng: Optional[float]
     end_lat: Optional[float]
     end_lng: Optional[float]
+    # Скрываются для незаподписчиков платного маршрута
     geometry: Optional[GeoJSONLineString] = None
     waypoints: Optional[List[Waypoint]] = None
     likes_count: int
@@ -121,3 +131,5 @@ class RouteResponse(BaseModel):
     author: Optional[UserPublic] = None
     is_liked: bool = False
     is_saved: bool = False
+    # True — пользователь не имеет доступа к полному контенту
+    is_locked: bool = False

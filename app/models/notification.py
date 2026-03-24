@@ -10,10 +10,11 @@ from app.core.database import Base
 
 
 class NotificationType(str, enum.Enum):
-    new_follower = "new_follower"   # кто-то подписался на меня
-    route_like = "route_like"       # лайкнули мой маршрут
-    new_comment = "new_comment"     # прокомментировали мой маршрут
-    new_route = "new_route"         # подписка опубликовала маршрут
+    new_follower = "new_follower"                    # кто-то подписался на меня
+    route_like = "route_like"                        # лайкнули мой маршрут
+    new_comment = "new_comment"                      # прокомментировали мой маршрут
+    new_route = "new_route"                          # подписка опубликовала маршрут
+    new_paid_subscriber = "new_paid_subscriber"      # кто-то оформил платную подписку
 
 
 class Notification(Base):
