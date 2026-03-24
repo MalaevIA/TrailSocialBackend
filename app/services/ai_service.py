@@ -237,6 +237,10 @@ async def _geocode_waypoints(
     if len(geocoded) >= 2:
         geocoded = await _fix_outlier_waypoints(client, geocoded, region, expected_distance_km)
 
+    # Step 4: fix consecutive gaps > 10 km by asking AI to refine or insert waypoints
+    if len(geocoded) >= 2:
+        geocoded = await _fix_consecutive_gaps(client, geocoded)
+
     return geocoded
 
 
@@ -311,6 +315,133 @@ async def _fix_outlier_waypoints(
 
 
 # ---------------------------------------------------------------------------
+# Consecutive gap fix: если две соседние точки дальше 10 км — просим AI уточнить
+# ---------------------------------------------------------------------------
+
+_MAX_CONSECUTIVE_GAP_KM = 10.0
+_MAX_GAP_FIX_ATTEMPTS = 5
+
+_GAP_FIX_PROMPT = """\
+Ты помогаешь уточнить маршрут. Проблема: точка "{current}" находится слишком далеко от предыдущей точки "{previous}" (расстояние {dist:.1f} км, допустимо не более 10 км).
+
+Предложи одно из двух решения в JSON:
+1. Более точный адрес для "{current}" — ближе к "{previous}":
+   {{"action": "fix", "name": "точный адрес"}}
+2. Промежуточную точку между "{previous}" и "{current}":
+   {{"action": "insert", "name": "промежуточная точка"}}
+
+Верни только JSON без пояснений."""
+
+
+async def _ask_ai_fix_gap(previous_name: str, current_name: str, dist_km: float) -> Optional[dict]:
+    """Просит AI уточнить точку или добавить промежуточную."""
+    prompt = _GAP_FIX_PROMPT.format(
+        previous=previous_name,
+        current=current_name,
+        dist=dist_km,
+    )
+    try:
+        result = await _call_llm(prompt)
+        action = result.get("action")
+        name = result.get("name", "").strip()
+        if action in ("fix", "insert") and name:
+            return {"action": action, "name": name}
+    except Exception as e:
+        logger.warning("AI gap fix failed: %s", e)
+    return None
+
+
+async def _fix_consecutive_gaps(
+    client: httpx.AsyncClient,
+    waypoints: list[dict],
+) -> list[dict]:
+    """Проверяет последовательные расстояния между точками.
+
+    Если расстояние между соседними точками > 10 км — просит AI уточнить адрес
+    или добавить промежуточную точку. До 5 попыток на каждую проблемную точку.
+    Если после всех попыток разрыв остаётся — точка удаляется.
+    """
+    if len(waypoints) < 2:
+        return waypoints
+
+    result = [waypoints[0]]
+
+    i = 1
+    while i < len(waypoints):
+        prev = result[-1]
+        curr = waypoints[i]
+        dist = _haversine_km(prev["lat"], prev["lng"], curr["lat"], curr["lng"])
+
+        if dist <= _MAX_CONSECUTIVE_GAP_KM:
+            result.append(curr)
+            i += 1
+            continue
+
+        logger.info(
+            "Gap %.1f km between '%s' and '%s', asking AI to fix (max %d attempts)",
+            dist, prev["name"], curr["name"], _MAX_GAP_FIX_ATTEMPTS,
+        )
+
+        fixed = False
+        for attempt in range(1, _MAX_GAP_FIX_ATTEMPTS + 1):
+            ai_fix = await _ask_ai_fix_gap(prev["name"], curr["name"], dist)
+            if not ai_fix:
+                logger.warning("Attempt %d/%d: AI returned nothing, skipping", attempt, _MAX_GAP_FIX_ATTEMPTS)
+                continue
+
+            center = (prev["lat"], prev["lng"])
+            new_coords = await _geocode(client, ai_fix["name"], center=center, spn="0.2,0.2")
+            if not new_coords:
+                logger.warning("Attempt %d/%d: geocoding '%s' failed", attempt, _MAX_GAP_FIX_ATTEMPTS, ai_fix["name"])
+                continue
+
+            new_dist = _haversine_km(prev["lat"], prev["lng"], new_coords[0], new_coords[1])
+
+            if ai_fix["action"] == "insert":
+                # Вставляем промежуточную точку и перепроверяем curr на следующей итерации
+                mid_wp = {"name": ai_fix["name"], "lat": new_coords[0], "lng": new_coords[1]}
+                if new_dist <= _MAX_CONSECUTIVE_GAP_KM:
+                    result.append(mid_wp)
+                    logger.info(
+                        "Attempt %d/%d: inserted '%s' (%.1f km from prev)",
+                        attempt, _MAX_GAP_FIX_ATTEMPTS, ai_fix["name"], new_dist,
+                    )
+                    fixed = True
+                    break
+                else:
+                    logger.warning(
+                        "Attempt %d/%d: intermediate '%s' still %.1f km away",
+                        attempt, _MAX_GAP_FIX_ATTEMPTS, ai_fix["name"], new_dist,
+                    )
+
+            else:  # action == "fix"
+                if new_dist <= _MAX_CONSECUTIVE_GAP_KM:
+                    curr = {**curr, "name": ai_fix["name"], "lat": new_coords[0], "lng": new_coords[1]}
+                    result.append(curr)
+                    logger.info(
+                        "Attempt %d/%d: fixed '%s' → '%s' (%.1f km from prev)",
+                        attempt, _MAX_GAP_FIX_ATTEMPTS, waypoints[i]["name"], ai_fix["name"], new_dist,
+                    )
+                    fixed = True
+                    break
+                else:
+                    logger.warning(
+                        "Attempt %d/%d: fixed '%s' → '%s' still %.1f km away",
+                        attempt, _MAX_GAP_FIX_ATTEMPTS, curr["name"], ai_fix["name"], new_dist,
+                    )
+
+        if not fixed:
+            logger.warning(
+                "Dropping waypoint '%s' after %d attempts (gap %.1f km)",
+                waypoints[i]["name"], _MAX_GAP_FIX_ATTEMPTS, dist,
+            )
+
+        i += 1
+
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Routing (OSRM — пеший маршрут)
 # ---------------------------------------------------------------------------
 
@@ -371,7 +502,7 @@ async def _fetch_photos_near(
             "ggscoord": f"{lat}|{lng}",
             "ggsradius": WIKIMEDIA_SEARCH_RADIUS,
             "ggsnamespace": 6,  # File namespace
-            "ggslimit": 5,
+            "ggslimit": _MAX_PHOTOS_PER_WAYPOINT,
             "prop": "imageinfo",
             "iiprop": "url|mime",
             "iiurlwidth": 1200,
@@ -403,11 +534,18 @@ async def _fetch_photos_near(
         return []
 
 
+_MAX_PHOTOS_PER_WAYPOINT = 2
+_MAX_PHOTOS_TOTAL = 20
+
+
 async def _fetch_photos_for_waypoints(
     waypoints: list[dict],
-    limit: int = 5,
 ) -> list[str]:
-    """Fetch photos from Wikimedia Commons for all waypoints in parallel."""
+    """Fetch photos from Wikimedia Commons for all waypoints in parallel.
+
+    Не более _MAX_PHOTOS_PER_WAYPOINT фото на одну точку,
+    не более _MAX_PHOTOS_TOTAL фото суммарно.
+    """
     if not waypoints:
         return []
 
@@ -417,15 +555,18 @@ async def _fetch_photos_for_waypoints(
         tasks = [_fetch_photos_near(client, wp["lat"], wp["lng"]) for wp in waypoints]
         results = await asyncio.gather(*tasks)
 
-    # Flatten, deduplicate, limit
-    seen = set()
-    photos = []
+    seen: set[str] = set()
+    photos: list[str] = []
     for photo_list in results:
+        taken = 0
         for url in photo_list:
+            if taken >= _MAX_PHOTOS_PER_WAYPOINT:
+                break
             if url not in seen:
                 seen.add(url)
                 photos.append(url)
-                if len(photos) >= limit:
+                taken += 1
+                if len(photos) >= _MAX_PHOTOS_TOTAL:
                     return photos
     return photos
 
