@@ -48,7 +48,7 @@ Router → Service → SQLAlchemy async query → DB
 Routers handle HTTP, services contain all business logic. No logic in routers beyond calling services and returning results.
 
 ### Routers registered in `app/main.py`
-`auth`, `users`, `routes`, `comments`, `feed`, `ai`, `notifications`, `upload`, `reports`, `admin`, `ws`.
+`auth`, `users`, `routes`, `comments`, `feed`, `ai`, `notifications`, `upload`, `reports`, `admin`, `subscriptions`, `payments`, `ws`.
 
 ### Auth & dependencies
 - `app/dependencies.py` exposes four type aliases used in router signatures:
@@ -80,8 +80,16 @@ Allowed types: jpeg, png, webp, gif. Max size: `MAX_UPLOAD_SIZE_MB` (default 10 
 
 ### WebSocket & notifications
 `app/core/ws_manager.py` — in-memory `ConnectionManager`, keyed by `user_id`. Supports multiple connections per user.
-Clients connect to `WS /ws/{user_id}?token=<access_token>`. `notification_service.py` calls `ws_manager.send_to_user()` to push events in real-time after DB write.
+Clients connect to `WS /ws/notifications` (no `/api/v1` prefix), then send `{"token": "<access_token>"}` as first JSON message within `WS_AUTH_TIMEOUT_SECONDS` (default 10s) — token is NOT passed in query string to avoid leaking into server access logs. `notification_service.py` calls `ws_manager.send_to_user()` to push events in real-time after DB write.
 WebSocket state is not persisted — reconnecting clients fetch missed notifications via REST.
+
+### Subscriptions & payments
+- Each creator has one `SubscriptionPlan` (price, description). Managed via `PUT /subscriptions/plans/my` (upsert) and `PATCH /subscriptions/plans/my`.
+- Users subscribe via `POST /payments/checkout` — payment token comes from the YooKassa Android SDK (formed client-side). Payment is processed synchronously; on success the subscription is activated immediately in DB.
+- `POST /payments/verify/{yookassa_payment_id}` — for 3DS flows: re-checks payment status and activates subscription if approved.
+- `POST /payments/webhook` — YooKassa server-to-server callback; verifies payment and activates subscription. Must be publicly accessible.
+- `is_paid` flag on `TrailRoute`: non-subscribers receive only `preview_description`; full `description` is returned only for the author or active subscribers. This check is enforced in `route_service`.
+- Required env vars: `YOOKASSA_SHOP_ID`, `YOOKASSA_SECRET_KEY`.
 
 ### Reports & admin
 - `reports` router: users submit abuse reports (`POST /reports`). Stored in `report` table.
@@ -136,6 +144,8 @@ Copy `.env.example` → `.env`. Required vars:
 - `REDIS_URL` — оставить пустым чтобы отключить кэш (по умолчанию пустой)
 - `UPLOAD_DIR` — directory for uploaded images (default: `uploads`)
 - `MAX_UPLOAD_SIZE_MB` — max upload size in MB (default: 10)
+- `YOOKASSA_SHOP_ID`, `YOOKASSA_SECRET_KEY` — for payment processing
+- `WS_AUTH_TIMEOUT_SECONDS` — seconds to wait for auth message after WS connect (default: 10)
 
 macOS Homebrew PostgreSQL uses the system username as superuser (not `postgres`).
 

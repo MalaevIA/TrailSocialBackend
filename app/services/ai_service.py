@@ -49,7 +49,7 @@ async def _with_retry(
 # Models that require OpenAI-compatible API instead of gRPC
 OPENAI_COMPAT_MODELS = {"qwen3-235b-a22b-fp8", "deepseek-v32", "gemma-3-27b-it", "gpt-oss-120b", "gpt-oss-20b"}
 
-SYSTEM_PROMPT = """Ты — помощник для приложения Trail Social. Твоя задача — предложить маршрут для прогулки/похода на основе предпочтений пользователя.
+SYSTEM_PROMPT = """Ты — помощник для приложения ВЕРСТА. Твоя задача — предложить маршрут для прогулки/похода на основе предпочтений пользователя.
 
 ## Важно
 
@@ -62,7 +62,7 @@ Waypoints — это ключевые точки маршрута (начало,
 
 Каждый waypoint.name — это ТОЧНЫЙ АДРЕС для геокодера. Геокодер ищет по всему миру, поэтому без точного адреса он найдёт ДРУГОЕ место!
 
-Формат name: "<Объект>, <Улица/Район>, <Город>, <Область/Регион>, Россия"
+Формат name: "<Объект>, <Улица/Район>, <Дом(если есть)>, <Город>, <Область/Регион>, Россия"
 
 Примеры ПРАВИЛЬНЫХ name:
 - "Парк Зарядье, улица Варварка, Москва, Россия"
@@ -247,6 +247,25 @@ async def _geocode_waypoints(
 # Default max distance from median center (km) — used when route distance is unknown
 DEFAULT_MAX_SPREAD_KM = 5.0
 
+# Max AI regeneration attempts per outlier waypoint
+_MAX_OUTLIER_FIX_ATTEMPTS = 4
+
+_OUTLIER_FIX_PROMPT = """\
+Ты помогаешь уточнить маршрут. Проблема: точка "{name}" оказалась слишком далеко от остальных точек маршрута ({dist:.1f} км от центра, допустимо не более {max_km:.0f} км).
+
+Центр маршрута: {region_hint}.
+Остальные точки маршрута: {other_names}.
+
+Твоя задача — предложить альтернативный адрес для точки "{name}". Это должно быть реально существующее место с похожим смыслом (тот же тип объекта — смотровая, водопад, вершина и т.д.), но расположенное в пределах {max_km:.0f} км от центра маршрута.
+
+Правила для адреса:
+- Формат: "Объект, Улица/Район, Город, Область, Россия"
+- Место должно быть реальным и геокодируемым
+- Не повторяй адрес из предыдущих попыток
+
+Верни ТОЛЬКО JSON без пояснений:
+{{"name": "точный адрес"}}"""
+
 
 def _get_median_center(waypoints: list[dict]) -> tuple[float, float]:
     """Calculate the median center of a list of waypoints."""
@@ -255,17 +274,47 @@ def _get_median_center(waypoints: list[dict]) -> tuple[float, float]:
     return lats[len(lats) // 2], lngs[len(lngs) // 2]
 
 
+async def _ask_ai_fix_outlier(
+    name: str,
+    dist_km: float,
+    max_km: float,
+    center_lat: float,
+    center_lng: float,
+    region: Optional[str],
+    other_waypoints: list[dict],
+) -> Optional[str]:
+    """Ask AI to suggest a replacement address for an outlier waypoint."""
+    other_names = ", ".join(f'"{wp["name"]}"' for wp in other_waypoints[:5])
+    region_hint = region or f"координаты ({center_lat:.4f}, {center_lng:.4f})"
+    prompt = _OUTLIER_FIX_PROMPT.format(
+        name=name,
+        dist=dist_km,
+        max_km=max_km,
+        region_hint=region_hint,
+        other_names=other_names or "нет данных",
+    )
+    try:
+        result = await _call_llm(prompt)
+        new_name = result.get("name", "").strip()
+        if new_name:
+            return new_name
+    except Exception as e:
+        logger.warning("AI outlier fix failed for '%s': %s", name, e)
+    return None
+
+
 async def _fix_outlier_waypoints(
     client: httpx.AsyncClient,
     waypoints: list[dict],
     region: Optional[str],
     expected_distance_km: Optional[float],
 ) -> list[dict]:
-    """Detect waypoints that are too far from the group and re-geocode them.
+    """Detect waypoints that are too far from the group and regenerate them via AI.
 
     Threshold = max(5, expected_distance_km) if distance is known, else 5 km.
-    For outliers: re-geocode with region suffix and tight spn (0.1° ≈ 10km).
-    If still an outlier — remove.
+    For each outlier: ask AI up to _MAX_OUTLIER_FIX_ATTEMPTS times for a better
+    address, geocode the suggestion, keep if within threshold.
+    Only remove the waypoint if all attempts are exhausted.
     """
     max_spread = DEFAULT_MAX_SPREAD_KM
     if expected_distance_km and expected_distance_km > DEFAULT_MAX_SPREAD_KM:
@@ -280,36 +329,68 @@ async def _fix_outlier_waypoints(
             result.append(wp)
             continue
 
-        # Outlier detected — try re-geocoding with region context and tight bias
         logger.info(
-            "Outlier '%s': %.1f km from center (max %.1f km), re-geocoding...",
+            "Outlier '%s': %.1f km from center (max %.1f km), asking AI to regenerate...",
             wp["name"], dist, max_spread,
         )
-        query = wp["name"]
-        if region and region.lower() not in query.lower():
-            query = f"{query}, {region}"
 
-        new_coords = await _geocode(
-            client, query, center=(center_lat, center_lng), spn="0.1,0.1",
-        )
-        if new_coords:
-            new_dist = _haversine_km(center_lat, center_lng, new_coords[0], new_coords[1])
-            if new_dist <= max_spread:
-                wp["lat"] = new_coords[0]
-                wp["lng"] = new_coords[1]
-                result.append(wp)
-                logger.info(
-                    "Re-geocoded '%s': %.1f km -> %.1f km from center",
-                    wp["name"], dist, new_dist,
+        other_waypoints = [w for w in waypoints if w is not wp]
+        current_name = wp["name"]
+        current_dist = dist
+        fixed = False
+
+        for attempt in range(1, _MAX_OUTLIER_FIX_ATTEMPTS + 1):
+            new_name = await _ask_ai_fix_outlier(
+                name=current_name,
+                dist_km=current_dist,
+                max_km=max_spread,
+                center_lat=center_lat,
+                center_lng=center_lng,
+                region=region,
+                other_waypoints=other_waypoints,
+            )
+            if not new_name:
+                logger.warning(
+                    "Outlier attempt %d/%d: AI returned nothing for '%s'",
+                    attempt, _MAX_OUTLIER_FIX_ATTEMPTS, current_name,
                 )
                 continue
+
+            new_coords = await _geocode(
+                client, new_name,
+                center=(center_lat, center_lng),
+                spn="0.1,0.1",
+            )
+            if not new_coords:
+                logger.warning(
+                    "Outlier attempt %d/%d: geocoding '%s' failed",
+                    attempt, _MAX_OUTLIER_FIX_ATTEMPTS, new_name,
+                )
+                continue
+
+            new_dist = _haversine_km(center_lat, center_lng, new_coords[0], new_coords[1])
+            if new_dist <= max_spread:
+                logger.info(
+                    "Outlier attempt %d/%d: fixed '%s' → '%s' (%.1f km → %.1f km from center)",
+                    attempt, _MAX_OUTLIER_FIX_ATTEMPTS, wp["name"], new_name, dist, new_dist,
+                )
+                result.append({**wp, "name": new_name, "lat": new_coords[0], "lng": new_coords[1]})
+                fixed = True
+                break
             else:
                 logger.warning(
-                    "Re-geocoded '%s' still too far: %.1f km (max %.1f km), removing",
-                    wp["name"], new_dist, max_spread,
+                    "Outlier attempt %d/%d: '%s' still %.1f km away (max %.1f km), retrying...",
+                    attempt, _MAX_OUTLIER_FIX_ATTEMPTS, new_name, new_dist, max_spread,
                 )
-        else:
-            logger.warning("Re-geocoding failed for '%s', removing", wp["name"])
+                # Pass the latest name and distance to the next AI prompt
+                current_name = new_name
+                current_dist = new_dist
+
+        if not fixed:
+            logger.warning(
+                "Dropping outlier '%s' after %d AI attempts — no suitable replacement found",
+                wp["name"], _MAX_OUTLIER_FIX_ATTEMPTS,
+            )
 
     return result
 

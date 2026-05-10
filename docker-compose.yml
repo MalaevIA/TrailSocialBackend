@@ -36,6 +36,8 @@ services:
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-me-in-production-use-a-long-random-string}
       UPLOAD_DIR: /app/uploads
       REDIS_URL: redis://redis:6379
+      ENVIRONMENT: production
+      LOG_LEVEL: INFO
       YANDEX_GPT_API_KEY: ${YANDEX_GPT_API_KEY:-}
       YANDEX_GPT_FOLDER_ID: ${YANDEX_GPT_FOLDER_ID:-}
       YANDEX_GEOCODER_API_KEY: ${YANDEX_GEOCODER_API_KEY:-}
@@ -50,6 +52,57 @@ services:
       redis:
         condition: service_healthy
 
+  # ── Мониторинг ────────────────────────────────────────────────────────────────
+
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheusdata:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.retention.time=15d'
+    depends_on:
+      - app
+
+  loki:
+    image: grafana/loki:3.1.0
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./monitoring/loki/loki-config.yml:/etc/loki/loki-config.yml:ro
+      - lokidata:/loki
+    command: -config.file=/etc/loki/loki-config.yml
+
+  promtail:
+    image: grafana/promtail:3.1.0
+    volumes:
+      - ./monitoring/promtail/promtail.yml:/etc/promtail/promtail.yml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    command: -config.file=/etc/promtail/promtail.yml
+    depends_on:
+      - loki
+
+  grafana:
+    image: grafana/grafana:11.1.0
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafanadata:/var/lib/grafana
+    depends_on:
+      - prometheus
+      - loki
+
 volumes:
   pgdata:
   redisdata:
+  prometheusdata:
+  lokidata:
+  grafanadata:

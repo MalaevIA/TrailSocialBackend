@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -13,11 +14,15 @@ from sqlalchemy.exc import SQLAlchemyError
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
+from prometheus_fastapi_instrumentator import Instrumentator
+
 from app.core.config import settings
+from app.core.logging_config import setup_logging
 from app.core.database import engine, AsyncSessionLocal
 from app.core.limiter import limiter
 from app.routers import auth, users, routes, comments, feed, ai, notifications, upload, ws, reports, admin, subscriptions, payments
 
+setup_logging(level=settings.LOG_LEVEL, environment=settings.ENVIRONMENT)
 logger = logging.getLogger(__name__)
 
 _CLEANUP_INTERVAL_SECONDS = settings.TOKEN_CLEANUP_INTERVAL_SECONDS
@@ -58,6 +63,9 @@ app = FastAPI(
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
+# Prometheus метрики — эндпоинт /metrics
+Instrumentator(excluded_handlers=["/metrics", "/health", "/uploads"]).instrument(app).expose(app)
+
 # CORS
 app.add_middleware(
     CORSMiddleware,
@@ -91,10 +99,38 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 
 @app.exception_handler(SQLAlchemyError)
 async def sqlalchemy_exception_handler(request: Request, exc: SQLAlchemyError):
+    logger.exception("Database error on %s %s", request.method, request.url.path)
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         content={"detail": "Database error"},
     )
+
+
+_request_logger = logging.getLogger("app.http")
+
+_SKIP_LOG_PREFIXES = ("/uploads/", "/health", "/docs", "/openapi", "/redoc")
+
+
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    # Не логируем статику и health-check
+    if request.url.path.startswith(_SKIP_LOG_PREFIXES):
+        return await call_next(request)
+
+    start = time.perf_counter()
+    response = await call_next(request)
+    duration_ms = (time.perf_counter() - start) * 1000
+
+    level = logging.WARNING if response.status_code >= 500 else logging.INFO
+    _request_logger.log(
+        level,
+        "%s %s %d %.0fms",
+        request.method,
+        request.url.path,
+        response.status_code,
+        duration_ms,
+    )
+    return response
 
 
 # Routers
